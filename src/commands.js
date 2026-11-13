@@ -1,0 +1,176 @@
+import { startSession, isSessionComplete } from './fairness.js';
+
+export const LIMITS = {
+  nameLength: 40,
+  maxParticipants: 10,
+};
+
+const START_TEXT =
+  'Welcome to Meal Chooser Bot! Use /setup <name1>, <name2>, ... to configure ' +
+  'who is picking meals, then /newsession to start a fair session. Type /help ' +
+  'for the full command list.';
+
+const HELP_TEXT = [
+  'Commands:',
+  '/setup <name1>, <name2>, ... - configure participants (2-10 names)',
+  '/newsession [n] - start a new fairness session (default length from roster)',
+  '/draw - pick who gets the next meal',
+  '/log <name> - manually log a pick for the next meal slot',
+  '/status - show the current session',
+  '/audit - show the full session log',
+  '/config - show the current roster and limits',
+  '/ate <dish> - log what was eaten',
+  '/food [n] - show recent food log entries',
+  '/menu - show or manage the meal idea list',
+].join('\n');
+
+// Lazily initializes state.roster from config defaults on first use.
+// Only called by the roster/session/draw commands — never by /ate, /food, or /menu.
+function ensureRoster(state, context) {
+  if (!state.roster || typeof state.roster !== 'object') {
+    state.roster = {
+      names: [...context.config.defaultParticipants],
+      defaultN: context.config.defaultSessionLength,
+    };
+  }
+  return state.roster;
+}
+
+function reply(state, text) {
+  return { state, effects: [{ type: 'send', text }] };
+}
+
+function parseCommand(text) {
+  const trimmed = (text || '').trim();
+  const spaceIdx = trimmed.indexOf(' ');
+  const rawCommand = spaceIdx === -1 ? trimmed : trimmed.slice(0, spaceIdx);
+  const args = spaceIdx === -1 ? '' : trimmed.slice(spaceIdx + 1).trim();
+  return { command: rawCommand.toLowerCase(), args };
+}
+
+function parseNames(args) {
+  const rawNames = args.includes(',') ? args.split(',') : args.split(/\s+/);
+  return rawNames.map((n) => n.trim()).filter((n) => n.length > 0);
+}
+
+function handleSetup(state, args, context) {
+  if (!args) {
+    return reply(
+      state,
+      `Usage: /setup <name1>, <name2>, ... (between 2 and ${LIMITS.maxParticipants} names)`
+    );
+  }
+
+  const names = parseNames(args);
+
+  if (names.length < 2 || names.length > LIMITS.maxParticipants) {
+    return reply(state, `Please provide between 2 and ${LIMITS.maxParticipants} names.`);
+  }
+
+  const tooLong = names.find((n) => n.length > LIMITS.nameLength);
+  if (tooLong) {
+    return reply(
+      state,
+      `Names must be ${LIMITS.nameLength} characters or fewer ("${tooLong}" is too long).`
+    );
+  }
+
+  ensureRoster(state, context);
+  const deferred = state.session !== null && !isSessionComplete(state.session);
+  const newRoster = { ...state.roster, names };
+  const newState = { ...state, roster: newRoster };
+
+  const text = deferred
+    ? `Roster updated to: ${names.join(', ')}. This applies starting next session — ` +
+      'the active session keeps its original participants.'
+    : `Roster updated to: ${names.join(', ')}.`;
+
+  return reply(newState, text);
+}
+
+function handleNewSession(state, args, context) {
+  ensureRoster(state, context);
+  const roster = state.roster;
+  const k = roster.names.length;
+
+  const n = args ? Number(args) : roster.defaultN;
+
+  if (!Number.isInteger(n) || n < k) {
+    return reply(
+      state,
+      `Session length must be at least ${k} (one meal per participant minimum).`
+    );
+  }
+
+  const prior = state.session;
+  const priorIncomplete = prior !== null && !isSessionComplete(prior);
+  const sessionIndex = (prior ? prior.sessionIndex : 0) + 1;
+
+  const newSession = startSession(n, roster.names, context.random, context.nowIso, sessionIndex);
+
+  let prefix = '';
+  if (priorIncomplete) {
+    const tally = prior.participants
+      .map((p) => `${p.name}: ${p.quota - p.remaining}/${p.quota}`)
+      .join(', ');
+    prefix = `Previous session ended early at ${prior.mealsLogged}/${prior.n} meals (${tally}). `;
+  }
+
+  const newState = { ...state, session: newSession };
+  const text = `${prefix}New session started: ${n} meals among ${roster.names.join(', ')}.`;
+
+  return reply(newState, text);
+}
+
+function handleStatus(state) {
+  if (!state.session) {
+    return reply(
+      state,
+      'No active session. Use /setup to configure participants, then /newsession to start one.'
+    );
+  }
+
+  const s = state.session;
+  const lines = s.participants.map((p) => `${p.name}: ${p.remaining}/${p.quota} remaining`);
+  const text = `Session ${s.sessionIndex}: ${s.mealsLogged}/${s.n} meals logged.\n${lines.join('\n')}`;
+
+  return reply(state, text);
+}
+
+function handleConfig(state, context) {
+  ensureRoster(state, context);
+  const roster = state.roster;
+  const text = [
+    `Participants: ${roster.names.join(', ')}`,
+    `Default session length: ${roster.defaultN}`,
+    `Limits: up to ${LIMITS.maxParticipants} participants, names up to ${LIMITS.nameLength} characters.`,
+  ].join('\n');
+
+  return reply(state, text);
+}
+
+export function handle(state, event, context) {
+  const working =
+    state && typeof state === 'object'
+      ? { roster: state.roster ?? null, session: state.session ?? null }
+      : { roster: null, session: null };
+
+  const { command, args } = parseCommand(event && event.text);
+
+  switch (command) {
+    case '/start':
+      return reply(working, START_TEXT);
+    case '/help':
+      return reply(working, HELP_TEXT);
+    case '/setup':
+      return handleSetup(working, args, context);
+    case '/newsession':
+      return handleNewSession(working, args, context);
+    case '/status':
+      return handleStatus(working);
+    case '/config':
+      return handleConfig(working, context);
+    default:
+      return reply(working, 'Unknown command. Type /help to see what I can do.');
+  }
+}
