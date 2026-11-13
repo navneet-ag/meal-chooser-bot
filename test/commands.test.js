@@ -70,7 +70,7 @@ test('/draw completing a session auto-rolls into the next one', () => {
 });
 
 test('/log applies a manual entry and allows negative remaining with a note', () => {
-  let state = handle({roster:{names:['A','B'], defaultN:4}, session:null}, msg('/newsession 4'), ctx()).state;
+  let state = handle({roster:{names:['A','B'], defaultN:4}, session:null}, msg('/newsession 6'), ctx()).state;
   for (let i = 0; i < 4; i++) state = handle(state, msg('/log A'), ctx()).state; // overshoot A's quota of 2
   const participantA = state.session.participants.find(p => p.name === 'A');
   assert.ok(participantA.remaining < 0);
@@ -87,4 +87,13 @@ test('/audit with an active session emits an audit effect for the shell to fulfi
   const state = handle({roster:{names:['A','B'], defaultN:4}, session:null}, msg('/newsession'), ctx()).state;
   const result = handle(state, msg('/audit'), ctx());
   assert.deepEqual(result.effects[0], {type:'audit', sessionIndex: state.session.sessionIndex});
+});
+
+test('auto-rolled session picks up a roster change made mid-session', () => {
+  let state = handle({roster:{names:['A','B'], defaultN:2}, session:null}, msg('/newsession 2'), ctx()).state;
+  state = handle(state, msg('/draw'), ctx()).state; // mealsLogged=1, session 1 still active with A,B
+  state = handle(state, msg('/setup C, D'), ctx()).state; // roster updated; current session (A,B) untouched
+  const result = handle(state, msg('/draw'), ctx()); // completes session 1, auto-rolls to session 2
+  assert.equal(result.state.session.sessionIndex, 2);
+  assert.deepEqual(result.state.session.participants.map(p => p.name), ['C', 'D']);
 });

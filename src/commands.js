@@ -157,28 +157,22 @@ function resolveActiveSession(state, context) {
 
 // Shared by /draw and /log: after the command's own mutation, checks whether
 // the session just completed and, if so, appends a completion summary and
-// rolls into a fresh session — same n and same roster names as the session
-// that just completed (not state.roster, which may have been updated mid-
-// session by /setup for "next session" only).
-//
-// If a manual /log overshoot leaves any participant's remaining negative,
-// the roll is skipped even though mealsLogged reached n: a fresh session
-// would silently erase the overshoot from view, so the imbalanced session
-// is left active for /status and /audit until the operator starts a new
-// one on purpose. A session that completes cleanly (every /draw, and any
-// /log that never drove someone below zero) always rolls automatically.
+// rolls into a fresh session — unconditionally, the instant mealsLogged
+// reaches n. The new session carries forward the completed session's `n`
+// but uses the CURRENT roster's names (state.roster.names), since the
+// auto-rolled session *is* "next session" — exactly the point at which a
+// mid-session /setup roster change (deferred until now) should take effect.
 function rollIfComplete(state, context, baseText) {
   const session = state.session;
-  const hasOvershoot = session.participants.some((p) => p.remaining < 0);
 
-  if (!isSessionComplete(session) || hasOvershoot) {
+  if (!isSessionComplete(session)) {
     return { state, text: baseText };
   }
 
   const tally = session.participants
     .map((p) => `${p.name}: ${p.quota - p.remaining}/${p.quota}`)
     .join(', ');
-  const names = session.participants.map((p) => p.name);
+  const names = state.roster.names;
   const nextSession = startSession(session.n, names, context.random, context.nowIso, session.sessionIndex + 1);
 
   const text =
