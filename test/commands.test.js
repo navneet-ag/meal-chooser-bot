@@ -97,3 +97,49 @@ test('auto-rolled session picks up a roster change made mid-session', () => {
   assert.equal(result.state.session.sessionIndex, 2);
   assert.deepEqual(result.state.session.participants.map(p => p.name), ['C', 'D']);
 });
+
+test('/ate logs a standalone food diary entry with a pre-baked confirmation', () => {
+  const result = handle({roster:null, session:null}, msg('/ate Pasta'), ctx());
+  assert.deepEqual(result.effects.find(e => e.type === 'food_log').entry, {dish:'Pasta'});
+  assert.match(result.effects.find(e => e.type === 'send').text, /Logged: Pasta/);
+});
+
+test('/ate rejects an empty dish without requiring a roster', () => {
+  const result = handle({roster:null, session:null}, msg('/ate'), ctx());
+  assert.match(result.effects[0].text, /Usage: \/ate/);
+});
+
+test('/ate rejects a dish name over the length limit', () => {
+  const result = handle({roster:null, session:null}, msg('/ate ' + 'x'.repeat(100)), ctx());
+  assert.match(result.effects[0].text, /characters or fewer/);
+});
+
+test('/food with no arg emits a food_history effect with the default limit', () => {
+  const result = handle({roster:null, session:null}, msg('/food'), ctx());
+  assert.deepEqual(result.effects[0], {type:'food_history', limit: LIMITS.foodHistoryDefault});
+});
+
+test('/food caps an oversized limit argument', () => {
+  const result = handle({roster:null, session:null}, msg('/food 500'), ctx());
+  assert.deepEqual(result.effects[0], {type:'food_history', limit: LIMITS.foodHistoryMax});
+});
+
+test('/menu with no args emits a menu_list effect', () => {
+  const result = handle({roster:null, session:null}, msg('/menu'), ctx());
+  assert.deepEqual(result.effects[0], {type:'menu_list'});
+});
+
+test('/menu add emits a menu_add effect with no pre-baked reply', () => {
+  const result = handle({roster:null, session:null}, msg('/menu add Pasta'), ctx());
+  assert.deepEqual(result.effects, [{type:'menu_add', name:'Pasta'}]);
+});
+
+test('/menu remove emits a menu_remove effect with no pre-baked reply', () => {
+  const result = handle({roster:null, session:null}, msg('/menu remove Pasta'), ctx());
+  assert.deepEqual(result.effects, [{type:'menu_remove', name:'Pasta'}]);
+});
+
+test('/menu add rejects a dish name over the length limit', () => {
+  const result = handle({roster:null, session:null}, msg('/menu add ' + 'x'.repeat(100)), ctx());
+  assert.match(result.effects[0].text, /characters or fewer/);
+});

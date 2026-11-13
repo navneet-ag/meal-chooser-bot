@@ -3,6 +3,9 @@ import { startSession, isSessionComplete, drawNext } from './fairness.js';
 export const LIMITS = {
   nameLength: 40,
   maxParticipants: 10,
+  dishLength: 80,
+  foodHistoryDefault: 10,
+  foodHistoryMax: 50,
 };
 
 const START_TEXT =
@@ -250,6 +253,71 @@ function handleAudit(state) {
   return { state, effects: [{ type: 'audit', sessionIndex: state.session.sessionIndex }] };
 }
 
+// /ate, /food, and /menu are intentionally decoupled from the roster/session
+// machinery: they never call ensureRoster and never read or write
+// state.roster or state.session, so they work identically with or without a
+// roster configured.
+
+function handleAte(state, args) {
+  const dish = args.trim();
+
+  if (!dish) {
+    return reply(state, 'Usage: /ate <dish>.');
+  }
+
+  if (dish.length > LIMITS.dishLength) {
+    return reply(state, `Dish name must be ${LIMITS.dishLength} characters or fewer.`);
+  }
+
+  return {
+    state,
+    effects: [
+      { type: 'food_log', entry: { dish } },
+      { type: 'send', text: `Logged: ${dish}` },
+    ],
+  };
+}
+
+function handleFood(state, args) {
+  const parsed = args ? Number(args) : LIMITS.foodHistoryDefault;
+  const n = Number.isInteger(parsed) ? parsed : LIMITS.foodHistoryDefault;
+  const limit = Math.min(Math.max(n, 1), LIMITS.foodHistoryMax);
+
+  return { state, effects: [{ type: 'food_history', limit }] };
+}
+
+function handleMenu(state, args) {
+  if (!args) {
+    return { state, effects: [{ type: 'menu_list' }] };
+  }
+
+  const lower = args.toLowerCase();
+
+  if (lower.startsWith('add ')) {
+    const name = args.slice(4).trim();
+    if (!name) {
+      return reply(state, 'Usage: /menu | /menu add <dish> | /menu remove <dish>.');
+    }
+    if (name.length > LIMITS.dishLength) {
+      return reply(state, `Dish name must be ${LIMITS.dishLength} characters or fewer.`);
+    }
+    return { state, effects: [{ type: 'menu_add', name }] };
+  }
+
+  if (lower.startsWith('remove ')) {
+    const name = args.slice(7).trim();
+    if (!name) {
+      return reply(state, 'Usage: /menu | /menu add <dish> | /menu remove <dish>.');
+    }
+    if (name.length > LIMITS.dishLength) {
+      return reply(state, `Dish name must be ${LIMITS.dishLength} characters or fewer.`);
+    }
+    return { state, effects: [{ type: 'menu_remove', name }] };
+  }
+
+  return reply(state, 'Usage: /menu | /menu add <dish> | /menu remove <dish>.');
+}
+
 function handleConfig(state, context) {
   ensureRoster(state, context);
   const roster = state.roster;
@@ -289,6 +357,12 @@ export function handle(state, event, context) {
       return handleAudit(working);
     case '/config':
       return handleConfig(working, context);
+    case '/ate':
+      return handleAte(working, args);
+    case '/food':
+      return handleFood(working, args);
+    case '/menu':
+      return handleMenu(working, args);
     default:
       return reply(working, 'Unknown command. Type /help to see what I can do.');
   }
