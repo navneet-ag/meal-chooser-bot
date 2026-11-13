@@ -37,3 +37,77 @@ export function computeProbabilities(participants) {
     p: p.remaining / sum
   }));
 }
+
+export function startSession(n, names, randomFn, nowIso, sessionIndex) {
+  const quotas = distributeQuotas(n, names, randomFn);
+  return {
+    sessionIndex,
+    n,
+    startedAt: nowIso,
+    mealsLogged: 0,
+    participants: quotas.map(q => ({
+      name: q.name,
+      quota: q.quota,
+      remaining: q.quota
+    }))
+  };
+}
+
+export function pickWinner(participants, r) {
+  const probs = computeProbabilities(participants);
+  let cumulative = 0;
+  let selected = null;
+
+  for (const prob of probs) {
+    cumulative += prob.p;
+    if (r < cumulative) {
+      selected = prob;
+      break;
+    }
+  }
+
+  // Fallback to the last participant with remaining > 0 if floating-point rounding leaves none selected
+  if (selected === null) {
+    for (let i = participants.length - 1; i >= 0; i--) {
+      if (participants[i].remaining > 0) {
+        const participant = participants[i];
+        selected = {
+          name: participant.name,
+          p: participant.remaining / participants.reduce((s, p) => s + p.remaining, 0)
+        };
+        break;
+      }
+    }
+  }
+
+  // Count participants with remaining > 0
+  const activeCount = participants.filter(p => p.remaining > 0).length;
+  const forced = activeCount === 1;
+
+  return {
+    name: selected.name,
+    p: selected.p,
+    forced
+  };
+}
+
+export function drawNext(session, randomFn) {
+  const r = randomFn();
+  const winner = pickWinner(session.participants, r);
+
+  // Find and decrement the winner's remaining
+  const winnerParticipant = session.participants.find(p => p.name === winner.name);
+  winnerParticipant.remaining--;
+
+  // Increment mealsLogged
+  session.mealsLogged++;
+
+  return {
+    winner,
+    mealNumber: session.mealsLogged
+  };
+}
+
+export function isSessionComplete(session) {
+  return session.mealsLogged === session.n;
+}
