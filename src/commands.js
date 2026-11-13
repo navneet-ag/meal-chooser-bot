@@ -1,4 +1,4 @@
-import { startSession, isSessionComplete } from './fairness.js';
+import { startSession, isSessionComplete, drawNext } from './fairness.js';
 
 export const LIMITS = {
   nameLength: 40,
@@ -137,6 +137,125 @@ function handleStatus(state) {
   return reply(state, text);
 }
 
+// Resolves {roster, session} for the draw/log commands without ever mutating
+// the caller-supplied `state` object. Lazily initializes the roster from
+// config defaults (mirroring ensureRoster) and, when no session is active,
+// auto-starts one the same way /newsession with no arg would. Because this
+// operates on a scratch holder rather than `state` itself, callers can still
+// discard the result and return `state` untouched (e.g. /log on no match).
+function resolveActiveSession(state, context) {
+  const holder = { roster: state.roster, session: state.session };
+  ensureRoster(holder, context);
+
+  if (!holder.session) {
+    const roster = holder.roster;
+    holder.session = startSession(roster.defaultN, roster.names, context.random, context.nowIso, 1);
+  }
+
+  return { roster: holder.roster, session: holder.session };
+}
+
+// Shared by /draw and /log: after the command's own mutation, checks whether
+// the session just completed and, if so, appends a completion summary and
+// rolls into a fresh session — same n and same roster names as the session
+// that just completed (not state.roster, which may have been updated mid-
+// session by /setup for "next session" only).
+//
+// If a manual /log overshoot leaves any participant's remaining negative,
+// the roll is skipped even though mealsLogged reached n: a fresh session
+// would silently erase the overshoot from view, so the imbalanced session
+// is left active for /status and /audit until the operator starts a new
+// one on purpose. A session that completes cleanly (every /draw, and any
+// /log that never drove someone below zero) always rolls automatically.
+function rollIfComplete(state, context, baseText) {
+  const session = state.session;
+  const hasOvershoot = session.participants.some((p) => p.remaining < 0);
+
+  if (!isSessionComplete(session) || hasOvershoot) {
+    return { state, text: baseText };
+  }
+
+  const tally = session.participants
+    .map((p) => `${p.name}: ${p.quota - p.remaining}/${p.quota}`)
+    .join(', ');
+  const names = session.participants.map((p) => p.name);
+  const nextSession = startSession(session.n, names, context.random, context.nowIso, session.sessionIndex + 1);
+
+  const text =
+    `${baseText} Session complete (${tally})! Starting a new session: ` +
+    `${session.n} meals among ${names.join(', ')}.`;
+
+  return { state: { ...state, session: nextSession }, text };
+}
+
+function handleDraw(state, context) {
+  const { roster, session } = resolveActiveSession(state, context);
+  const newState = { roster, session };
+
+  const { winner, mealNumber } = drawNext(session, context.random);
+  const logEntry = {
+    sessionIndex: session.sessionIndex,
+    mealNumber,
+    name: winner.name,
+    method: 'auto',
+    probability: winner.p,
+    forced: winner.forced,
+  };
+
+  const baseText = `${winner.name} is picked for meal ${mealNumber}/${session.n}.`;
+  const { state: finalState, text } = rollIfComplete(newState, context, baseText);
+
+  return {
+    state: finalState,
+    effects: [{ type: 'send', text }, { type: 'log', entry: logEntry }],
+  };
+}
+
+function handleLog(state, args, context) {
+  if (!args) {
+    return reply(state, 'Usage: /log <name>');
+  }
+
+  const { roster, session } = resolveActiveSession(state, context);
+  const participant = session.participants.find(
+    (p) => p.name.toLowerCase() === args.toLowerCase()
+  );
+
+  if (!participant) {
+    return reply(state, `No participant named "${args}" in the current session.`);
+  }
+
+  participant.remaining--;
+  session.mealsLogged++;
+  const mealNumber = session.mealsLogged;
+
+  const logEntry = {
+    sessionIndex: session.sessionIndex,
+    mealNumber,
+    name: participant.name,
+    method: 'manual',
+    probability: null,
+    forced: false,
+  };
+
+  const newState = { roster, session };
+  const baseText = `Logged ${participant.name} for meal ${mealNumber}/${session.n}.`;
+  const { state: finalState, text } = rollIfComplete(newState, context, baseText);
+
+  return {
+    state: finalState,
+    effects: [{ type: 'send', text }, { type: 'log', entry: logEntry }],
+  };
+}
+
+function handleAudit(state) {
+  if (!state.session) {
+    return reply(state, 'No active session yet.');
+  }
+
+  return { state, effects: [{ type: 'audit', sessionIndex: state.session.sessionIndex }] };
+}
+
 function handleConfig(state, context) {
   ensureRoster(state, context);
   const roster = state.roster;
@@ -168,6 +287,12 @@ export function handle(state, event, context) {
       return handleNewSession(working, args, context);
     case '/status':
       return handleStatus(working);
+    case '/draw':
+      return handleDraw(working, context);
+    case '/log':
+      return handleLog(working, args, context);
+    case '/audit':
+      return handleAudit(working);
     case '/config':
       return handleConfig(working, context);
     default:

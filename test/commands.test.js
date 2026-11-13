@@ -51,3 +51,40 @@ test('unknown command falls back to help pointer', () => {
   const result = handle({roster:null, session:null}, msg('/nonsense'), ctx());
   assert.match(result.effects[0].text, /\/help/);
 });
+
+test('/draw auto-starts a session when none is active and logs the draw', () => {
+  const result = handle({roster:{names:['A','B'], defaultN:4}, session:null}, msg('/draw'), ctx());
+  const logEffect = result.effects.find(e => e.type === 'log');
+  assert.equal(logEffect.entry.method, 'auto');
+  assert.equal(logEffect.entry.mealNumber, 1);
+  assert.equal(result.state.session.mealsLogged, 1);
+});
+
+test('/draw completing a session auto-rolls into the next one', () => {
+  let state = {roster:{names:['A','B'], defaultN:2}, session:null};
+  state = handle(state, msg('/draw'), ctx()).state;
+  const result = handle(state, msg('/draw'), ctx());
+  assert.equal(result.state.session.sessionIndex, 2);
+  assert.equal(result.state.session.mealsLogged, 0);
+  assert.match(result.effects.find(e => e.type === 'send').text, /new session/i);
+});
+
+test('/log applies a manual entry and allows negative remaining with a note', () => {
+  let state = handle({roster:{names:['A','B'], defaultN:4}, session:null}, msg('/newsession 4'), ctx()).state;
+  for (let i = 0; i < 4; i++) state = handle(state, msg('/log A'), ctx()).state; // overshoot A's quota of 2
+  const participantA = state.session.participants.find(p => p.name === 'A');
+  assert.ok(participantA.remaining < 0);
+});
+
+test('/log on an unmatched name errors without mutating state', () => {
+  const state = handle({roster:{names:['A','B'], defaultN:4}, session:null}, msg('/newsession'), ctx()).state;
+  const result = handle(state, msg('/log Nobody'), ctx());
+  assert.match(result.effects[0].text, /No participant named/);
+  assert.equal(result.state.session.mealsLogged, 0);
+});
+
+test('/audit with an active session emits an audit effect for the shell to fulfill', () => {
+  const state = handle({roster:{names:['A','B'], defaultN:4}, session:null}, msg('/newsession'), ctx()).state;
+  const result = handle(state, msg('/audit'), ctx());
+  assert.deepEqual(result.effects[0], {type:'audit', sessionIndex: state.session.sessionIndex});
+});
