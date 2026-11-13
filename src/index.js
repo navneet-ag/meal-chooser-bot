@@ -1,0 +1,208 @@
+// Worker entry point: the Telegram webhook. Wires together commands.js
+// (pure command logic), telegram.js (outbound replies), and db.js (D1
+// persistence). See docs/superpowers/specs/2026-11-11-meal-chooser-bot-design.md
+// for the product-level default values used below.
+
+import { handle } from './commands.js';
+import { sendMessage } from './telegram.js';
+import {
+  getRoster,
+  saveRoster,
+  getActiveSession,
+  createSession,
+  recordDraw,
+  readSessionLog,
+  appendFoodLog,
+  readFoodLog,
+  listMenu,
+  addMenuItem,
+  removeMenuItem,
+  hasProcessed,
+  markProcessed,
+} from './db.js';
+
+const DEFAULT_PARTICIPANTS = ['Person 1', 'Person 2'];
+const DEFAULT_SESSION_LENGTH = 21;
+
+function formatAuditRows(rows) {
+  if (rows.length === 0) return 'No picks logged yet.';
+  return rows
+    .map((r) => {
+      const methodLabel = r.method === 'manual' ? 'manual' : r.forced ? 'auto, forced' : 'auto';
+      const probText = r.probability != null ? ` (p=${r.probability.toFixed(2)})` : '';
+      return `${r.mealNumber}. ${r.name} [${methodLabel}]${probText}`;
+    })
+    .join('\n');
+}
+
+function formatFoodRows(rows) {
+  if (rows.length === 0) return 'No food logged yet.';
+  return rows.map((r) => `${r.loggedAt}: ${r.dish}`).join('\n');
+}
+
+// Parses and validates the inbound Telegram update. Returns null for any
+// shape that should be silently IGNORED (malformed JSON, missing fields) --
+// the caller never touches D1 in that case.
+async function parseUpdate(request) {
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return null;
+  }
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+
+  const message = body.message;
+  if (!message || typeof message !== 'object') return null;
+
+  const chat = message.chat;
+  if (!chat || chat.id === undefined || chat.id === null) return null;
+  if (typeof message.text !== 'string') return null;
+  if (body.update_id === undefined || body.update_id === null) return null;
+
+  return { chatId: chat.id, text: message.text, updateId: body.update_id };
+}
+
+// Executes the effects produced by handle(), in order, against D1 and
+// Telegram. `originalSession` is whatever was loaded from D1 *before*
+// calling handle() (possibly null) -- it's needed because commands.js
+// mutates an existing session object in place (so it's still the right
+// object to persist a draw against even after handle() returns a
+// *different* object in result.state.session following an auto-roll).
+async function runEffects(env, chatId, updateId, nowIso, originalSession, result) {
+  for (const effect of result.effects) {
+    switch (effect.type) {
+      case 'send':
+        await sendMessage(env, chatId, effect.text);
+        break;
+
+      case 'log': {
+        // The session this draw/log was recorded against:
+        // - If a session was already active, commands.js mutates it in
+        //   place (drawNext / the manual decrement in handleLog), so
+        //   `originalSession` is still that exact object, `.id` and all.
+        // - If no session was active, resolveActiveSession() auto-started
+        //   a brand-new one. As long as that single draw doesn't *also*
+        //   complete it (true for any sane defaultSessionLength > 1, and
+        //   our default is 21), that new session is still
+        //   result.state.session here, so create it now to obtain its id.
+        const drawnSession = originalSession ?? result.state.session;
+        if (!drawnSession.id) {
+          await createSession(env, chatId, drawnSession);
+        }
+        await recordDraw(env, drawnSession, effect.entry, updateId, nowIso);
+        break;
+      }
+
+      case 'audit': {
+        // /audit only ever reports on the currently active session, and
+        // handleAudit never mutates state, so result.state.session *is*
+        // the same object we loaded from D1 -- already carrying `.id`.
+        const rows = await readSessionLog(env, result.state.session.id);
+        await sendMessage(env, chatId, formatAuditRows(rows));
+        break;
+      }
+
+      case 'food_log':
+        await appendFoodLog(env, chatId, effect.entry.dish, updateId, nowIso);
+        break;
+
+      case 'food_history': {
+        const rows = await readFoodLog(env, chatId, effect.limit);
+        await sendMessage(env, chatId, formatFoodRows(rows));
+        break;
+      }
+
+      case 'menu_list': {
+        const items = await listMenu(env, chatId);
+        const text =
+          items.length === 0 ? 'The menu is empty — add one with /menu add <dish>.' : items.join('\n');
+        await sendMessage(env, chatId, text);
+        break;
+      }
+
+      case 'menu_add': {
+        const { added } = await addMenuItem(env, chatId, effect.name, nowIso);
+        const text = added ? `Added ${effect.name} to the menu.` : `${effect.name} is already on the menu.`;
+        await sendMessage(env, chatId, text);
+        break;
+      }
+
+      case 'menu_remove': {
+        const { removed } = await removeMenuItem(env, chatId, effect.name);
+        const text = removed ? `Removed ${effect.name} from the menu.` : `${effect.name} isn't on the menu.`;
+        await sendMessage(env, chatId, text);
+        break;
+      }
+
+      default:
+        break;
+    }
+  }
+
+  // Covers every case where handle() produced a brand-new session object
+  // that hasn't been persisted yet: /newsession, /setup's first use (via
+  // ensureRoster's lazy defaults interacting with a later /newsession),
+  // and an auto-roll completing the old session (handled above for the
+  // completing draw itself; this is the freshly-rolled *next* session).
+  // Safe to call even when the 'log' case above already created a session
+  // this same request, since that session already has `.id` set by then.
+  if (result.state.session && !result.state.session.id) {
+    await createSession(env, chatId, result.state.session);
+  }
+}
+
+export default {
+  async fetch(request, env, _ctx) {
+    if (request.method !== 'POST') {
+      return new Response('Meal chooser bot is running.');
+    }
+
+    const secretHeader = request.headers.get('X-Telegram-Bot-Api-Secret-Token');
+    if (!secretHeader || secretHeader !== env.WEBHOOK_SECRET) {
+      return new Response('IGNORED');
+    }
+
+    const update = await parseUpdate(request);
+    if (!update) {
+      return new Response('IGNORED');
+    }
+
+    const { chatId, text, updateId } = update;
+    if (String(chatId) !== String(env.AUTHORIZED_CHAT_ID)) {
+      return new Response('IGNORED');
+    }
+
+    if (await hasProcessed(env, chatId, updateId)) {
+      return new Response('OK');
+    }
+
+    const roster = await getRoster(env, chatId);
+    const session = await getActiveSession(env, chatId);
+    const state = { roster, session };
+
+    const nowMs = Date.now();
+    const nowIso = new Date(nowMs).toISOString();
+    const context = {
+      config: {
+        defaultParticipants: DEFAULT_PARTICIPANTS,
+        defaultSessionLength: DEFAULT_SESSION_LENGTH,
+      },
+      nowMs,
+      nowIso,
+      random: Math.random,
+    };
+
+    const result = handle(state, { text }, context);
+
+    await runEffects(env, chatId, updateId, nowIso, session, result);
+
+    if (result.state.roster) {
+      await saveRoster(env, chatId, result.state.roster);
+    }
+
+    await markProcessed(env, chatId, updateId);
+
+    return new Response('OK');
+  },
+};
