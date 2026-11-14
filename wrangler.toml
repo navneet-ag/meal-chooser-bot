@@ -1,11 +1,12 @@
 name = "meal-chooser-bot"
 main = "src/index.js"
 compatibility_date = "2026-11-12"
+account_id = "aa5884f5e9617abc0c17877d97d10c0c"
 
 [[d1_databases]]
 binding = "DB"
 database_name = "meal_chooser"
-database_id = "REPLACE_AFTER_WRANGLER_D1_CREATE"
+database_id = "b754f9b5-d54d-46fc-a6c8-7957f041d0ad"
 
 [vars]
 AUTHORIZED_CHAT_ID = "REPLACE_WITH_YOUR_GROUP_CHAT_ID"
