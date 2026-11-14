@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert';
 import worker from '../src/index.js';
 import { freshEnv } from './helpers.js';
-import { getActiveSession, readFoodLog, listMenu, hasProcessed } from '../src/db.js';
+import { getActiveSession, readFoodLog, listMenu, hasProcessed, readSessionLog } from '../src/db.js';
 
 const SECRET = 'test-secret';
 
@@ -159,4 +159,79 @@ test('/draw with no setup ever run auto-starts a session using config defaults',
   assert.equal(session.mealsLogged, 1);
   assert.equal(session.n, 21); // design doc default session length
   assert.equal(session.participants.length, 2); // design doc default participant count
+});
+
+// Regression for Fix 1: a bare /draw against a fresh chat (no /newsession
+// ever run) auto-starts a session via index.js's auto-start path. Before
+// Fix 1, that path double-decremented the winner's `remaining` (once via
+// createSession persisting the already-decremented in-memory session, once
+// again via recordDraw's relative decrement), breaking this invariant on
+// the very first draw.
+test('a bare /draw auto-start keeps sum(remaining) === n - mealsLogged for the persisted session', async (t) => {
+  const env = await bindings(t);
+  stubTelegram(t);
+  await worker.fetch(validRequest({ chatId: '1', text: '/draw', updateId: '1' }), env);
+  const session = await getActiveSession(env, '1');
+  const sumRemaining = session.participants.reduce((s, p) => s + p.remaining, 0);
+  assert.equal(sumRemaining, session.n - session.mealsLogged);
+});
+
+// Regression for Fix 1: drive a complete session that was started by /draw
+// itself (never /newsession) -- the exact scenario the critical bug broke,
+// and which the pre-existing full-session test above did NOT catch because
+// it calls /newsession first. Confirms the session completes (auto-rolls)
+// and that each participant's persisted total in meal_log matches their
+// quota exactly.
+test('a full session auto-started by /draw alone (never /newsession) completes with totals matching quotas exactly', async (t) => {
+  const env = await bindings(t);
+  stubTelegram(t);
+
+  await worker.fetch(validRequest({ chatId: '1', text: '/setup Anshika, Partner, Guest', updateId: '1' }), env);
+
+  await worker.fetch(validRequest({ chatId: '1', text: '/draw', updateId: '2' }), env);
+  const firstSession = await getActiveSession(env, '1'); // auto-started by /draw itself, not /newsession
+  const quotas = Object.fromEntries(firstSession.participants.map((p) => [p.name, p.quota]));
+  const n = firstSession.n;
+
+  for (let i = 1; i < n; i++) {
+    await worker.fetch(validRequest({ chatId: '1', text: '/draw', updateId: String(10 + i) }), env);
+  }
+
+  const rolledSession = await getActiveSession(env, '1');
+  assert.equal(rolledSession.sessionIndex, 2); // confirms the session completed and auto-rolled
+  assert.equal(rolledSession.mealsLogged, 0);
+
+  const log = await readSessionLog(env, firstSession.id);
+  assert.equal(log.length, n);
+  const totals = { Anshika: 0, Partner: 0, Guest: 0 };
+  for (const row of log) totals[row.name]++;
+  assert.deepEqual(totals, quotas);
+});
+
+// Regression for the project's second headline guarantee (independence of
+// /draw from the menu), currently untested anywhere: seeding /menu add with
+// dishes and running a full session must never leak those dish names into
+// any outbound Telegram message, proving /draw genuinely never reads
+// menu_items.
+test('menu dish names never appear in outbound messages during a full /draw session', async (t) => {
+  const env = await bindings(t);
+  const sent = stubTelegram(t);
+
+  const dishes = ['Zzyzx Casserole', 'Qwirkle Soup', 'Plimsoll Pie'];
+  for (let i = 0; i < dishes.length; i++) {
+    await worker.fetch(validRequest({ chatId: '1', text: `/menu add ${dishes[i]}`, updateId: String(i) }), env);
+  }
+  sent.length = 0;
+
+  await worker.fetch(validRequest({ chatId: '1', text: '/setup Anshika, Partner', updateId: '100' }), env);
+  await worker.fetch(validRequest({ chatId: '1', text: '/newsession 4', updateId: '101' }), env);
+  for (let i = 0; i < 4; i++) {
+    await worker.fetch(validRequest({ chatId: '1', text: '/draw', updateId: String(200 + i) }), env);
+  }
+
+  for (const m of sent) {
+    for (const dish of dishes) {
+      assert.ok(!m.text.includes(dish), `outbound message unexpectedly mentions menu dish "${dish}": ${m.text}`);
+    }
+  }
 });

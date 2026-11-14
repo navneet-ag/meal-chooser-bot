@@ -87,10 +87,20 @@ export async function createSession(env, chatId, session) {
 }
 
 export async function recordDraw(env, session, entry, updateId, nowIso) {
+  // Absolute write, not a relative decrement: `session.participants` already
+  // carries the correct post-draw `remaining` value (computed in memory by
+  // drawNext/handleLog before any persistence happens), so we persist that
+  // value directly. This is what makes the write correct regardless of
+  // whether createSession already persisted this exact session (and this
+  // exact already-decremented value) moments earlier -- as it does on the
+  // auto-start path in index.js -- or whether the session already existed
+  // in D1 beforehand. A relative `remaining = remaining - 1` double-counts
+  // the decrement in the former case.
+  const participant = session.participants.find((p) => p.name === entry.name);
   await env.DB.batch([
     env.DB.prepare(
-      'UPDATE participants SET remaining = remaining - 1 WHERE session_id = ? AND name = ?'
-    ).bind(session.id, entry.name),
+      'UPDATE participants SET remaining = ? WHERE session_id = ? AND name = ?'
+    ).bind(participant.remaining, session.id, entry.name),
     env.DB.prepare(
       `INSERT INTO meal_log (session_id, meal_number, name, method, probability, forced, logged_at, update_id)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`

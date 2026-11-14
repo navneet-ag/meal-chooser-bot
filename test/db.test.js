@@ -72,6 +72,33 @@ test('recordDraw persists the decrement and the log row', async (t) => {
   assert.equal(log[0].name, winner.name);
 });
 
+// Regression for the Fix 1 critical bug: src/index.js's auto-start path for
+// /draw calls drawNext() (which decrements `remaining` in memory) BEFORE
+// createSession() ever persists the session, then calls recordDraw()
+// against that already-decremented object. If recordDraw does a *relative*
+// decrement (`remaining = remaining - 1`), the winner's remaining gets
+// double-decremented: once implicitly via createSession persisting the
+// already-mutated in-memory value, and again via recordDraw's own
+// decrement. This test reproduces that exact call order directly against
+// db.js (without going through the Worker) and asserts the invariant that
+// must hold after any draw: sum(remaining) === n - mealsLogged.
+test('recordDraw against a session created AFTER drawNext already mutated it does not double-decrement', async (t) => {
+  const env = await freshEnv(t);
+  const session = startSession(4, ['A', 'B'], () => 0.1, '2026-11-12T00:00:00.000Z', 1);
+  const { winner, mealNumber } = drawNext(session, () => 0.1); // mutates session.participants in memory first
+  await createSession(env, '1', session); // persists the ALREADY-decremented value, like index.js's auto-start path
+  await recordDraw(
+    env,
+    session,
+    { sessionIndex: 1, mealNumber, name: winner.name, method: 'auto', probability: winner.p, forced: winner.forced },
+    'u1',
+    '2026-11-12T00:01:00.000Z',
+  );
+  const reloaded = await getActiveSession(env, '1');
+  const sumRemaining = reloaded.participants.reduce((s, p) => s + p.remaining, 0);
+  assert.equal(sumRemaining, reloaded.n - reloaded.mealsLogged);
+});
+
 test('hasProcessed/markProcessed dedupe by (chatId, updateId)', async (t) => {
   const env = await freshEnv(t);
   assert.equal(await hasProcessed(env, '1', 'upd1'), false);
