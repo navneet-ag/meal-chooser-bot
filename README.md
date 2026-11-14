@@ -4,7 +4,7 @@ A Telegram bot that fairly decides who picks the next meal using a remainder-bal
 
 ## Scope
 
-**Core fairness feature:** `/draw` picks who decides the next meal, balancing selections so that over a session of *n* meals among *k* participants, each person gets approximately *n/k* picks. The algorithm handles non-divisible *n* by distributing remainder picks fairly. `/log` allows manual overrides.
+**Core fairness feature:** `/draw` picks who decides the next meal, balancing selections so that over a session of *n* meals among *k* participants, each person gets *exactly* `floor(n/k)` or `floor(n/k) + 1` picks — not approximately; the quotas always sum to exactly *n*. The algorithm handles non-divisible *n* by distributing the remainder picks fairly (randomly, one extra pick per person until the remainder is used up). `/log` allows manual overrides.
 
 **Food diary:** `/ate` and `/food` log what was actually eaten, independent of the draw. They are decoupled from the fairness session — `/ate` entries appear in `/food` regardless of whether a session is running or what the fairness draw says.
 
@@ -18,15 +18,23 @@ This v1 focuses on fairness and basic tracking. It excludes budgets, dietary res
 
 Open Telegram, message **@BotFather**, run `/newbot`, and follow the prompts. Save the token securely — it grants full control of the bot.
 
-Send your new bot any private message. Then in a browser, call:
+### 2. Add the bot to the group chat and capture its chat id
 
-```sh
-https://api.telegram.org/bot<TOKEN>/getUpdates
-```
+`AUTHORIZED_CHAT_ID` needs to be the numeric id of the *group* chat both people will use — not a private chat with the bot — so:
 
-Note the group chat's numeric `id` from the `message.chat.id` field (group chat IDs are negative). You'll use this to configure `AUTHORIZED_CHAT_ID` later.
+1. Add the bot to that group chat.
+2. Send any message in the group (from either person).
+3. In a browser, call:
 
-### 2. Create the D1 database
+   ```sh
+   https://api.telegram.org/bot<TOKEN>/getUpdates
+   ```
+
+4. Find that message in the response and read `message.chat.id` — it will be a negative number, since it's a group chat. You'll use this to configure `AUTHORIZED_CHAT_ID` later.
+
+> **Note:** if the group is later upgraded to a "supergroup" (Telegram does this automatically once the group crosses a certain member count or feature threshold), the chat id changes. If that happens, repeat this step and update `AUTHORIZED_CHAT_ID` to the new id.
+
+### 3. Create the D1 database
 
 In the repo, run:
 
@@ -43,7 +51,7 @@ database_name = "meal_chooser"
 database_id = "<your-database-id-here>"
 ```
 
-### 3. Initialize the schema
+### 4. Initialize the schema
 
 Run:
 
@@ -53,7 +61,7 @@ wrangler d1 execute meal_chooser --file=schema.sql --remote
 
 This creates the `roster`, `sessions`, `participants`, `meal_log`, `food_log`, `menu_items`, and `processed_updates` tables.
 
-### 4. Set secrets
+### 5. Set secrets
 
 ```sh
 wrangler secret put BOT_TOKEN
@@ -66,7 +74,7 @@ wrangler secret put WEBHOOK_SECRET
 # openssl rand -hex 32
 ```
 
-### 5. Configure the authorized chat
+### 6. Configure the authorized chat
 
 Edit `wrangler.toml` and set `AUTHORIZED_CHAT_ID` to the group chat's numeric ID (obtained above from `getUpdates`):
 
@@ -113,7 +121,7 @@ Expected output includes:
 | Command | Description |
 |---------|-------------|
 | `/setup <name1>, <name2>, ...` | Configure participants (2–10 names). Changes take effect for the next session. |
-| `/newsession [n]` | Start a new fairness session with *n* meals (default: 21). Requires at least one participant per participant. |
+| `/newsession [n]` | Start a new fairness session with *n* meals (default: 21). *n* must be at least the number of participants (one meal per participant minimum). |
 | `/draw` | Auto-pick who decides the next meal, using fair allocation. Starts a session if none is active. |
 | `/log <name>` | Manually log a meal assignment for the named participant. Starts a session if none is active. |
 | `/status` | Show the current session: meal count, participant quotas, and remaining picks. |
@@ -189,3 +197,8 @@ Expected output includes:
 - Telegram credentials (`BOT_TOKEN`, `WEBHOOK_SECRET`) are stored in wrangler secrets and never logged.
 - Session state auto-rolls: the instant meal count reaches *n*, a new session starts automatically with the same *n* and the current roster names.
 - Mid-session roster changes (via `/setup`) defer until the next session; the running session keeps its original participants.
+
+## Design and planning docs
+
+- [Design doc](docs/superpowers/specs/2026-11-11-meal-chooser-bot-design.md)
+- [Implementation plan](docs/superpowers/plans/2026-11-11-meal-chooser-bot.md)

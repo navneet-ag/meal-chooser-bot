@@ -177,38 +177,50 @@ export default {
       return new Response('OK');
     }
 
-    const roster = await getRoster(env, chatId);
-    const session = await getActiveSession(env, chatId);
-    const state = { roster, session };
+    // Everything below touches D1 and/or the Telegram API, so any throw
+    // here (a bug, a D1 hiccup, a Telegram API failure) must not propagate:
+    // an uncaught throw would make the Worker return a 500, and Telegram
+    // retries a failed delivery indefinitely -- re-running every effect
+    // that already succeeded on a partial failure, since markProcessed is
+    // the last statement in the happy path. Swallowing here and returning
+    // 'OK' regardless means a single poisoned update can degrade at worst
+    // to a dropped reply, never a permanent retry-storm lockout.
+    try {
+      const roster = await getRoster(env, chatId);
+      const session = await getActiveSession(env, chatId);
+      const state = { roster, session };
 
-    const nowMs = Date.now();
-    const nowIso = new Date(nowMs).toISOString();
-    const context = {
-      config: {
-        defaultParticipants: DEFAULT_PARTICIPANTS,
-        defaultSessionLength: DEFAULT_SESSION_LENGTH,
-      },
-      nowMs,
-      nowIso,
-      random: Math.random,
-    };
+      const nowMs = Date.now();
+      const nowIso = new Date(nowMs).toISOString();
+      const context = {
+        config: {
+          defaultParticipants: DEFAULT_PARTICIPANTS,
+          defaultSessionLength: DEFAULT_SESSION_LENGTH,
+        },
+        nowMs,
+        nowIso,
+        random: Math.random,
+      };
 
-    const result = handle(state, { text }, context);
+      const result = handle(state, { text }, context);
 
-    await runEffects(env, chatId, updateId, nowIso, session, result);
+      await runEffects(env, chatId, updateId, nowIso, session, result);
 
-    // Reference-inequality, not truthiness: handle() passes the loaded
-    // roster through unchanged for most commands (/status, /audit, /ate,
-    // /food, /menu, and even a non-completing /draw or /log), so a bare
-    // truthiness check would re-save an identical roster on nearly every
-    // call once one exists. Only a real change -- null -> object on the
-    // first /setup, or a new object from a later /setup -- produces a
-    // different reference here.
-    if (result.state.roster !== roster) {
-      await saveRoster(env, chatId, result.state.roster);
+      // Reference-inequality, not truthiness: handle() passes the loaded
+      // roster through unchanged for most commands (/status, /audit, /ate,
+      // /food, /menu, and even a non-completing /draw or /log), so a bare
+      // truthiness check would re-save an identical roster on nearly every
+      // call once one exists. Only a real change -- null -> object on the
+      // first /setup, or a new object from a later /setup -- produces a
+      // different reference here.
+      if (result.state.roster !== roster) {
+        await saveRoster(env, chatId, result.state.roster);
+      }
+
+      await markProcessed(env, chatId, updateId);
+    } catch (err) {
+      console.error('Unhandled error processing update', updateId, 'for chat', chatId, err);
     }
-
-    await markProcessed(env, chatId, updateId);
 
     return new Response('OK');
   },

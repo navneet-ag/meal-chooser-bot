@@ -16,14 +16,14 @@ export async function sendMessage(env, chatId, text) {
   if (!response.ok) {
     const body = await response.json();
     const errorMessage = body.description || 'Unknown error';
-    const redacted = errorMessage.replace(env.BOT_TOKEN, '[REDACTED]');
+    const redacted = errorMessage.replaceAll(env.BOT_TOKEN, '[REDACTED]');
     throw new Error(`Telegram API error: ${redacted}`);
   }
 
   const result = await response.json();
   if (!result.ok) {
     const errorMessage = result.description || 'Unknown error';
-    const redacted = errorMessage.replace(env.BOT_TOKEN, '[REDACTED]');
+    const redacted = errorMessage.replaceAll(env.BOT_TOKEN, '[REDACTED]');
     throw new Error(`Telegram API error: ${redacted}`);
   }
 }

@@ -154,13 +154,17 @@ export async function listMenu(env, chatId) {
   return result.results.map(r => r.name);
 }
 
+async function menuItemExists(env, chatId, name) {
+  const row = await env.DB.prepare(
+    'SELECT 1 FROM menu_items WHERE chat_id = ? AND name = ?'
+  ).bind(chatId, name).first();
+  return !!row;
+}
+
 export async function addMenuItem(env, chatId, name, nowIso) {
   // SELECT-first (per the brief): determine the before/after boolean
   // definitively, rather than relying on D1Result metadata field names.
-  const existing = await env.DB.prepare(
-    'SELECT 1 FROM menu_items WHERE chat_id = ? AND name = ?'
-  ).bind(chatId, name).first();
-  if (existing) return { added: false };
+  if (await menuItemExists(env, chatId, name)) return { added: false };
 
   await env.DB.prepare(
     'INSERT INTO menu_items (chat_id, name, added_at) VALUES (?, ?, ?)'
@@ -169,10 +173,7 @@ export async function addMenuItem(env, chatId, name, nowIso) {
 }
 
 export async function removeMenuItem(env, chatId, name) {
-  const existing = await env.DB.prepare(
-    'SELECT 1 FROM menu_items WHERE chat_id = ? AND name = ?'
-  ).bind(chatId, name).first();
-  if (!existing) return { removed: false };
+  if (!(await menuItemExists(env, chatId, name))) return { removed: false };
 
   await env.DB.prepare(
     'DELETE FROM menu_items WHERE chat_id = ? AND name = ?'

@@ -45,10 +45,15 @@ function reply(state, text) {
 
 function parseCommand(text) {
   const trimmed = (text || '').trim();
-  const spaceIdx = trimmed.indexOf(' ');
+  const spaceMatch = trimmed.match(/\s/);
+  const spaceIdx = spaceMatch ? spaceMatch.index : -1;
   const rawCommand = spaceIdx === -1 ? trimmed : trimmed.slice(0, spaceIdx);
   const args = spaceIdx === -1 ? '' : trimmed.slice(spaceIdx + 1).trim();
-  return { command: rawCommand.toLowerCase(), args };
+  // Group chats with 2+ bots send "/draw@SomeBotName" via Telegram's command
+  // picker (and sometimes users type it by hand) -- strip the @botname
+  // suffix before matching against known commands.
+  const command = rawCommand.toLowerCase().split('@')[0];
+  return { command, args };
 }
 
 function parseNames(args) {
@@ -258,16 +263,27 @@ function handleAudit(state) {
 // state.roster or state.session, so they work identically with or without a
 // roster configured.
 
+// Shared by /ate, /menu add, and /menu remove: enforces LIMITS.dishLength
+// on a dish/menu-item name. Returns a reply result if the name is too
+// long, or null if it's within the limit.
+function dishLengthError(state, dish) {
+  if (dish.length > LIMITS.dishLength) {
+    return reply(state, `Dish name must be ${LIMITS.dishLength} characters or fewer.`);
+  }
+  return null;
+}
+
 function handleAte(state, args) {
-  const dish = args.trim();
+  // args is already trimmed by parseCommand's dispatcher, so no need to
+  // trim it again here.
+  const dish = args;
 
   if (!dish) {
     return reply(state, 'Usage: /ate <dish>.');
   }
 
-  if (dish.length > LIMITS.dishLength) {
-    return reply(state, `Dish name must be ${LIMITS.dishLength} characters or fewer.`);
-  }
+  const lengthError = dishLengthError(state, dish);
+  if (lengthError) return lengthError;
 
   return {
     state,
@@ -298,9 +314,8 @@ function handleMenu(state, args) {
     if (!name) {
       return reply(state, 'Usage: /menu | /menu add <dish> | /menu remove <dish>.');
     }
-    if (name.length > LIMITS.dishLength) {
-      return reply(state, `Dish name must be ${LIMITS.dishLength} characters or fewer.`);
-    }
+    const lengthError = dishLengthError(state, name);
+    if (lengthError) return lengthError;
     return { state, effects: [{ type: 'menu_add', name }] };
   }
 
@@ -309,9 +324,8 @@ function handleMenu(state, args) {
     if (!name) {
       return reply(state, 'Usage: /menu | /menu add <dish> | /menu remove <dish>.');
     }
-    if (name.length > LIMITS.dishLength) {
-      return reply(state, `Dish name must be ${LIMITS.dishLength} characters or fewer.`);
-    }
+    const lengthError = dishLengthError(state, name);
+    if (lengthError) return lengthError;
     return { state, effects: [{ type: 'menu_remove', name }] };
   }
 

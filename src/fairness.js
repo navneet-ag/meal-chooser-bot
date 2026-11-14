@@ -70,11 +70,7 @@ export function pickWinner(participants, r) {
   if (selected === null) {
     for (let i = participants.length - 1; i >= 0; i--) {
       if (participants[i].remaining > 0) {
-        const participant = participants[i];
-        selected = {
-          name: participant.name,
-          p: participant.remaining / participants.reduce((s, p) => s + p.remaining, 0)
-        };
+        selected = probs[i];
         break;
       }
     }
@@ -95,11 +91,9 @@ export function drawNext(session, randomFn) {
   const r = randomFn();
   const winner = pickWinner(session.participants, r);
 
-  // Find and decrement the winner's remaining
   const winnerParticipant = session.participants.find(p => p.name === winner.name);
   winnerParticipant.remaining--;
 
-  // Increment mealsLogged
   session.mealsLogged++;
 
   return {
