@@ -1,0 +1,11 @@
+{
+  "name": "meal-chooser-bot",
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/"
+  },
+  "devDependencies": {
+    "wrangler": "^3.0.0",
+    "miniflare": "^3.0.0"
+  }
+}
