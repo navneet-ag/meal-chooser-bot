@@ -197,7 +197,14 @@ export default {
 
     await runEffects(env, chatId, updateId, nowIso, session, result);
 
-    if (result.state.roster) {
+    // Reference-inequality, not truthiness: handle() passes the loaded
+    // roster through unchanged for most commands (/status, /audit, /ate,
+    // /food, /menu, and even a non-completing /draw or /log), so a bare
+    // truthiness check would re-save an identical roster on nearly every
+    // call once one exists. Only a real change -- null -> object on the
+    // first /setup, or a new object from a later /setup -- produces a
+    // different reference here.
+    if (result.state.roster !== roster) {
       await saveRoster(env, chatId, result.state.roster);
     }
 
