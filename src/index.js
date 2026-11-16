@@ -148,16 +148,27 @@ async function runEffects(env, chatId, updateId, nowIso, originalSession, result
       }
 
       case 'menu_list': {
-        const items = await listMenu(env, chatId);
-        const text =
-          items.length === 0 ? 'The menu is empty — add one with /menu add <dish>.' : items.join('\n');
+        const items = await listMenu(env, chatId, effect.category);
+        let text;
+        if (items.length > 0) {
+          text = items.join('\n');
+        } else if (effect.category === 'breakfast') {
+          text = 'No breakfast items yet — add one with /menu add breakfast <dish>.';
+        } else if (effect.category === 'lunch_dinner') {
+          text = 'No lunch/dinner items yet — add one with /menu add lunch <dish>.';
+        } else {
+          text = 'The menu is empty — add one with /menu add <breakfast|lunch|dinner> <dish>.';
+        }
         await sendMessage(env, chatId, text);
         break;
       }
 
       case 'menu_add': {
-        const { added } = await addMenuItem(env, chatId, effect.name, nowIso);
-        const text = added ? `Added ${effect.name} to the menu.` : `${effect.name} is already on the menu.`;
+        const { added } = await addMenuItem(env, chatId, effect.name, effect.category, nowIso);
+        const categoryLabel = effect.category === 'breakfast' ? 'breakfast' : 'lunch/dinner';
+        const text = added
+          ? `Added ${effect.name} to the menu (${categoryLabel}).`
+          : `${effect.name} is already on the menu.`;
         await sendMessage(env, chatId, text);
         break;
       }

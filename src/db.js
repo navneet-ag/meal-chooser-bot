@@ -174,10 +174,17 @@ export async function listSessionSummaries(env, chatId) {
   return summaries;
 }
 
-export async function listMenu(env, chatId) {
-  const result = await env.DB.prepare(
-    'SELECT name FROM menu_items WHERE chat_id = ? ORDER BY name'
-  ).bind(chatId).all();
+// category is optional: omit it (or pass null/undefined) to list every
+// item regardless of category, or pass 'breakfast' | 'lunch_dinner' to
+// filter to one bucket (/menu breakfast, /menu lunch, /menu dinner).
+export async function listMenu(env, chatId, category) {
+  const sql = category
+    ? 'SELECT name FROM menu_items WHERE chat_id = ? AND category = ? ORDER BY name'
+    : 'SELECT name FROM menu_items WHERE chat_id = ? ORDER BY name';
+  const stmt = category
+    ? env.DB.prepare(sql).bind(chatId, category)
+    : env.DB.prepare(sql).bind(chatId);
+  const result = await stmt.all();
   return result.results.map(r => r.name);
 }
 
@@ -188,14 +195,14 @@ async function menuItemExists(env, chatId, name) {
   return !!row;
 }
 
-export async function addMenuItem(env, chatId, name, nowIso) {
+export async function addMenuItem(env, chatId, name, category, nowIso) {
   // SELECT-first (per the brief): determine the before/after boolean
   // definitively, rather than relying on D1Result metadata field names.
   if (await menuItemExists(env, chatId, name)) return { added: false };
 
   await env.DB.prepare(
-    'INSERT INTO menu_items (chat_id, name, added_at) VALUES (?, ?, ?)'
-  ).bind(chatId, name, nowIso).run();
+    'INSERT INTO menu_items (chat_id, name, category, added_at) VALUES (?, ?, ?, ?)'
+  ).bind(chatId, name, category, nowIso).run();
   return { added: true };
 }
 

@@ -171,11 +171,30 @@ test('/history summarizes every session oldest-first, marking only the latest in
 test('/menu add twice reports already-added the second time', async (t) => {
   const env = await bindings(t);
   const sent = stubTelegram(t);
-  await worker.fetch(validRequest({ chatId: '1', text: '/menu add Pasta', updateId: '1' }), env);
+  await worker.fetch(validRequest({ chatId: '1', text: '/menu add lunch Pasta', updateId: '1' }), env);
   sent.length = 0;
-  await worker.fetch(validRequest({ chatId: '1', text: '/menu add Pasta', updateId: '2' }), env);
+  await worker.fetch(validRequest({ chatId: '1', text: '/menu add lunch Pasta', updateId: '2' }), env);
   assert.match(sent[0].text, /already on the menu/);
   assert.deepEqual(await listMenu(env, '1'), ['Pasta']); // not duplicated
+});
+
+test('/menu breakfast and /menu lunch only show items added to that category', async (t) => {
+  const env = await bindings(t);
+  const sent = stubTelegram(t);
+  await worker.fetch(validRequest({ chatId: '1', text: '/menu add breakfast Poha', updateId: '1' }), env);
+  await worker.fetch(validRequest({ chatId: '1', text: '/menu add lunch Pasta', updateId: '2' }), env);
+
+  sent.length = 0;
+  await worker.fetch(validRequest({ chatId: '1', text: '/menu breakfast', updateId: '3' }), env);
+  assert.equal(sent[0].text, 'Poha');
+
+  sent.length = 0;
+  await worker.fetch(validRequest({ chatId: '1', text: '/menu dinner', updateId: '4' }), env); // "dinner" is a synonym for the same lunch_dinner bucket as "lunch"
+  assert.equal(sent[0].text, 'Pasta');
+
+  sent.length = 0;
+  await worker.fetch(validRequest({ chatId: '1', text: '/menu', updateId: '5' }), env);
+  assert.equal(sent[0].text, 'Pasta\nPoha');
 });
 
 test('/draw with no setup ever run auto-starts a session using config defaults', async (t) => {
@@ -246,7 +265,7 @@ test('menu dish names never appear in outbound messages during a full /draw sess
 
   const dishes = ['Zzyzx Casserole', 'Qwirkle Soup', 'Plimsoll Pie'];
   for (let i = 0; i < dishes.length; i++) {
-    await worker.fetch(validRequest({ chatId: '1', text: `/menu add ${dishes[i]}`, updateId: String(i) }), env);
+    await worker.fetch(validRequest({ chatId: '1', text: `/menu add lunch ${dishes[i]}`, updateId: String(i) }), env);
   }
   sent.length = 0;
 

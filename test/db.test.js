@@ -171,22 +171,33 @@ test('listSessionSummaries returns an empty array when the chat has never starte
 
 test('addMenuItem reports added:false on a second identical add', async (t) => {
   const env = await freshEnv(t);
-  assert.deepEqual(await addMenuItem(env, '1', 'Pasta', '2026-11-12T00:00:00.000Z'), { added: true });
-  assert.deepEqual(await addMenuItem(env, '1', 'Pasta', '2026-11-12T00:01:00.000Z'), { added: false });
+  assert.deepEqual(await addMenuItem(env, '1', 'Pasta', 'lunch_dinner', '2026-11-12T00:00:00.000Z'), { added: true });
+  assert.deepEqual(await addMenuItem(env, '1', 'Pasta', 'lunch_dinner', '2026-11-12T00:01:00.000Z'), { added: false });
   assert.deepEqual(await listMenu(env, '1'), ['Pasta']);
 });
 
 test('removeMenuItem reports removed:false when the dish is not on the menu', async (t) => {
   const env = await freshEnv(t);
   assert.deepEqual(await removeMenuItem(env, '1', 'Pasta'), { removed: false });
-  await addMenuItem(env, '1', 'Pasta', '2026-11-12T00:00:00.000Z');
+  await addMenuItem(env, '1', 'Pasta', 'lunch_dinner', '2026-11-12T00:00:00.000Z');
   assert.deepEqual(await removeMenuItem(env, '1', 'Pasta'), { removed: true });
   assert.deepEqual(await listMenu(env, '1'), []);
 });
 
 test('listMenu orders items by name', async (t) => {
   const env = await freshEnv(t);
-  await addMenuItem(env, '1', 'Zucchini Bake', '2026-11-12T00:00:00.000Z');
-  await addMenuItem(env, '1', 'Apple Crumble', '2026-11-12T00:01:00.000Z');
+  await addMenuItem(env, '1', 'Zucchini Bake', 'lunch_dinner', '2026-11-12T00:00:00.000Z');
+  await addMenuItem(env, '1', 'Apple Crumble', 'breakfast', '2026-11-12T00:01:00.000Z');
   assert.deepEqual(await listMenu(env, '1'), ['Apple Crumble', 'Zucchini Bake']);
+});
+
+test('listMenu filters by category when one is given', async (t) => {
+  const env = await freshEnv(t);
+  await addMenuItem(env, '1', 'Poha', 'breakfast', '2026-11-12T00:00:00.000Z');
+  await addMenuItem(env, '1', 'Pasta', 'lunch_dinner', '2026-11-12T00:01:00.000Z');
+  await addMenuItem(env, '1', 'Sooji Toast', 'breakfast', '2026-11-12T00:02:00.000Z');
+
+  assert.deepEqual(await listMenu(env, '1', 'breakfast'), ['Poha', 'Sooji Toast']);
+  assert.deepEqual(await listMenu(env, '1', 'lunch_dinner'), ['Pasta']);
+  assert.deepEqual(await listMenu(env, '1'), ['Pasta', 'Poha', 'Sooji Toast']);
 });

@@ -47,6 +47,7 @@ CREATE TABLE food_log (
 CREATE TABLE menu_items (
   chat_id INTEGER,
   name TEXT,
+  category TEXT,
   added_at TEXT,
   PRIMARY KEY (chat_id, name)
 );

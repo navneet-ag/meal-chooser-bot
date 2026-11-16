@@ -24,7 +24,9 @@ const HELP_TEXT = [
   '/config - show the current roster and limits',
   '/ate <dish> - log what was eaten (auto-tagged breakfast/lunch/dinner)',
   '/food [n] - show recent food log entries',
-  '/menu - show or manage the meal idea list',
+  '/menu [breakfast|lunch|dinner] - show meal ideas, all or filtered',
+  '/menu add <breakfast|lunch|dinner> <dish> - add an idea',
+  '/menu remove <dish> - remove an idea',
   '/history - show a one-line summary of every session, oldest first',
 ].join('\n');
 
@@ -331,6 +333,29 @@ function handleHistory(state) {
   return { state, effects: [{ type: 'history_summary' }] };
 }
 
+// /menu categories are deliberately just two buckets, not three matching
+// /ate's breakfast/lunch/dinner tagging: a menu IDEA (unlike something you
+// actually ate at a specific recorded time) is often equally valid for
+// lunch or dinner, which is exactly why the user grouped their own list
+// that way rather than splitting it.
+const MENU_CATEGORIES = { breakfast: 'breakfast', lunch: 'lunch_dinner', dinner: 'lunch_dinner' };
+
+const MENU_USAGE =
+  'Usage: /menu | /menu breakfast | /menu lunch | /menu add <breakfast|lunch|dinner> <dish> | /menu remove <dish>.';
+
+// Splits "breakfast Poha" into {category:'breakfast', dish:'Poha'}, or
+// null if the leading word isn't a recognized category or no dish name
+// follows it.
+function parseMenuAdd(rest) {
+  const spaceIdx = rest.indexOf(' ');
+  if (spaceIdx === -1) return null;
+  const category = MENU_CATEGORIES[rest.slice(0, spaceIdx).toLowerCase()];
+  if (!category) return null;
+  const dish = rest.slice(spaceIdx + 1).trim();
+  if (!dish) return null;
+  return { category, dish };
+}
+
 function handleMenu(state, args) {
   if (!args) {
     return { state, effects: [{ type: 'menu_list' }] };
@@ -338,27 +363,34 @@ function handleMenu(state, args) {
 
   const lower = args.toLowerCase();
 
+  if (lower === 'breakfast') {
+    return { state, effects: [{ type: 'menu_list', category: 'breakfast' }] };
+  }
+  if (lower === 'lunch' || lower === 'dinner') {
+    return { state, effects: [{ type: 'menu_list', category: 'lunch_dinner' }] };
+  }
+
   if (lower.startsWith('add ')) {
-    const name = args.slice(4).trim();
-    if (!name) {
-      return reply(state, 'Usage: /menu | /menu add <dish> | /menu remove <dish>.');
+    const parsed = parseMenuAdd(args.slice(4).trim());
+    if (!parsed) {
+      return reply(state, MENU_USAGE);
     }
-    const lengthError = dishLengthError(state, name);
+    const lengthError = dishLengthError(state, parsed.dish);
     if (lengthError) return lengthError;
-    return { state, effects: [{ type: 'menu_add', name }] };
+    return { state, effects: [{ type: 'menu_add', name: parsed.dish, category: parsed.category }] };
   }
 
   if (lower.startsWith('remove ')) {
     const name = args.slice(7).trim();
     if (!name) {
-      return reply(state, 'Usage: /menu | /menu add <dish> | /menu remove <dish>.');
+      return reply(state, MENU_USAGE);
     }
     const lengthError = dishLengthError(state, name);
     if (lengthError) return lengthError;
     return { state, effects: [{ type: 'menu_remove', name }] };
   }
 
-  return reply(state, 'Usage: /menu | /menu add <dish> | /menu remove <dish>.');
+  return reply(state, MENU_USAGE);
 }
 
 function handleConfig(state, context) {

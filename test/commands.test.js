@@ -150,14 +150,36 @@ test('/food caps an oversized limit argument', () => {
   assert.deepEqual(result.effects[0], {type:'food_history', limit: LIMITS.foodHistoryMax});
 });
 
-test('/menu with no args emits a menu_list effect', () => {
+test('/menu with no args emits a menu_list effect with no category filter', () => {
   const result = handle({roster:null, session:null}, msg('/menu'), ctx());
   assert.deepEqual(result.effects[0], {type:'menu_list'});
 });
 
-test('/menu add emits a menu_add effect with no pre-baked reply', () => {
+test('/menu breakfast and /menu lunch/dinner emit category-filtered menu_list effects', () => {
+  const breakfast = handle({roster:null, session:null}, msg('/menu breakfast'), ctx());
+  assert.deepEqual(breakfast.effects[0], {type:'menu_list', category:'breakfast'});
+
+  const lunch = handle({roster:null, session:null}, msg('/menu lunch'), ctx());
+  assert.deepEqual(lunch.effects[0], {type:'menu_list', category:'lunch_dinner'});
+
+  const dinner = handle({roster:null, session:null}, msg('/menu dinner'), ctx());
+  assert.deepEqual(dinner.effects[0], {type:'menu_list', category:'lunch_dinner'});
+});
+
+test('/menu add requires a leading breakfast|lunch|dinner category', () => {
   const result = handle({roster:null, session:null}, msg('/menu add Pasta'), ctx());
-  assert.deepEqual(result.effects, [{type:'menu_add', name:'Pasta'}]);
+  assert.match(result.effects[0].text, /Usage: \/menu/);
+});
+
+test('/menu add emits a category-tagged menu_add effect with no pre-baked reply', () => {
+  const breakfast = handle({roster:null, session:null}, msg('/menu add breakfast Poha'), ctx());
+  assert.deepEqual(breakfast.effects, [{type:'menu_add', name:'Poha', category:'breakfast'}]);
+
+  const lunch = handle({roster:null, session:null}, msg('/menu add lunch Arhar Dal Tadka + Rice'), ctx());
+  assert.deepEqual(lunch.effects, [{type:'menu_add', name:'Arhar Dal Tadka + Rice', category:'lunch_dinner'}]);
+
+  const dinner = handle({roster:null, session:null}, msg('/menu add dinner Kadhi + Rice'), ctx());
+  assert.deepEqual(dinner.effects, [{type:'menu_add', name:'Kadhi + Rice', category:'lunch_dinner'}]);
 });
 
 test('/menu remove emits a menu_remove effect with no pre-baked reply', () => {
@@ -166,6 +188,6 @@ test('/menu remove emits a menu_remove effect with no pre-baked reply', () => {
 });
 
 test('/menu add rejects a dish name over the length limit', () => {
-  const result = handle({roster:null, session:null}, msg('/menu add ' + 'x'.repeat(100)), ctx());
+  const result = handle({roster:null, session:null}, msg('/menu add breakfast ' + 'x'.repeat(100)), ctx());
   assert.match(result.effects[0].text, /characters or fewer/);
 });
