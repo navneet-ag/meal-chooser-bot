@@ -138,7 +138,34 @@ test('/ate and /food work with no setup/session ever run', async (t) => {
   await worker.fetch(validRequest({ chatId: '1', text: '/ate Pasta', updateId: '1' }), env);
   const rows = await readFoodLog(env, '1', 10);
   assert.equal(rows[0].dish, 'Pasta');
+  // The real wall clock (not injectable here) decides which of the three
+  // buckets this lands in; the exact boundary math is pinned deterministically
+  // in commands.test.js. This just proves the value makes it through end to end.
+  assert.ok(['breakfast', 'lunch', 'dinner'].includes(rows[0].mealType));
   assert.equal(await getActiveSession(env, '1'), null); // /ate never touches sessions
+});
+
+test('/history summarizes every session oldest-first, marking only the latest in progress', async (t) => {
+  const env = await bindings(t);
+  const sent = stubTelegram(t);
+
+  await worker.fetch(validRequest({ chatId: '1', text: '/setup A, B', updateId: '1' }), env);
+  await worker.fetch(validRequest({ chatId: '1', text: '/newsession 2', updateId: '2' }), env);
+  await worker.fetch(validRequest({ chatId: '1', text: '/draw', updateId: '3' }), env);
+  await worker.fetch(validRequest({ chatId: '1', text: '/draw', updateId: '4' }), env); // completes session 1 (n=2, k=2 -> exactly A 1, B 1), auto-rolls to session 2
+  await worker.fetch(validRequest({ chatId: '1', text: '/draw', updateId: '5' }), env); // one pick into session 2, which also carries n=2 forward -- still incomplete
+
+  sent.length = 0;
+  await worker.fetch(validRequest({ chatId: '1', text: '/history', updateId: '6' }), env);
+
+  const text = sent[0].text;
+  // Session 1 is fully determined regardless of who won which draw: with
+  // n=2 and 2 participants, the exact-balance guarantee means both totals
+  // are exactly 1 -- only the (alphabetical) name order could vary, and it
+  // can't here since the roster is already alphabetical (A, B).
+  assert.match(text, /Session 1 \(n=2\): A 1, B 1(\n|$)/);
+  // Session 2's single draw could have gone to either participant.
+  assert.match(text, /Session 2 \(n=2\): [AB] 1 \(in progress\)/);
 });
 
 test('/menu add twice reports already-added the second time', async (t) => {

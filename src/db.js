@@ -132,19 +132,46 @@ export async function readSessionLog(env, sessionId) {
   }));
 }
 
-export async function appendFoodLog(env, chatId, dish, updateId, nowIso) {
+export async function appendFoodLog(env, chatId, dish, mealType, updateId, nowIso) {
   await env.DB.prepare(
-    'INSERT INTO food_log (chat_id, dish, logged_at, update_id) VALUES (?, ?, ?, ?)'
-  ).bind(chatId, dish, nowIso, updateId).run();
+    'INSERT INTO food_log (chat_id, dish, meal_type, logged_at, update_id) VALUES (?, ?, ?, ?, ?)'
+  ).bind(chatId, dish, mealType, nowIso, updateId).run();
 }
 
 export async function readFoodLog(env, chatId, limit) {
   const result = await env.DB.prepare(
-    `SELECT dish, logged_at FROM food_log WHERE chat_id = ?
+    `SELECT dish, meal_type, logged_at FROM food_log WHERE chat_id = ?
      ORDER BY logged_at DESC, id DESC LIMIT ?`
   ).bind(chatId, limit).all();
 
-  return result.results.map(r => ({ dish: r.dish, loggedAt: r.logged_at }));
+  return result.results.map(r => ({ dish: r.dish, mealType: r.meal_type, loggedAt: r.logged_at }));
+}
+
+// One row per session ever started for this chat (not just the active one),
+// oldest first, with each participant's actual pick count derived from
+// meal_log -- not from the participants table's `remaining`, since that only
+// reflects the state at a session's last write, not a stable historical
+// total, and not from the current roster, since an old session's own
+// participants may differ from today's roster. Doesn't depend on
+// `sessions.status` (which is set once on insert and never updated) at all.
+export async function listSessionSummaries(env, chatId) {
+  const sessionsResult = await env.DB.prepare(
+    'SELECT id, session_index, n FROM sessions WHERE chat_id = ? ORDER BY session_index ASC'
+  ).bind(chatId).all();
+
+  const summaries = [];
+  for (const s of sessionsResult.results) {
+    const totalsResult = await env.DB.prepare(
+      'SELECT name, COUNT(*) AS cnt FROM meal_log WHERE session_id = ? GROUP BY name ORDER BY name'
+    ).bind(s.id).all();
+
+    summaries.push({
+      sessionIndex: s.session_index,
+      n: s.n,
+      totals: totalsResult.results.map(r => ({ name: r.name, count: r.cnt })),
+    });
+  }
+  return summaries;
 }
 
 export async function listMenu(env, chatId) {

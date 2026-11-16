@@ -22,9 +22,10 @@ const HELP_TEXT = [
   '/status - show the current session',
   '/audit - show the full session log',
   '/config - show the current roster and limits',
-  '/ate <dish> - log what was eaten',
+  '/ate <dish> - log what was eaten (auto-tagged breakfast/lunch/dinner)',
   '/food [n] - show recent food log entries',
   '/menu - show or manage the meal idea list',
+  '/history - show a one-line summary of every session, oldest first',
 ].join('\n');
 
 // Lazily initializes state.roster from config defaults on first use.
@@ -273,7 +274,29 @@ function dishLengthError(state, dish) {
   return null;
 }
 
-function handleAte(state, args) {
+// Local hour-of-day (0-23) for a UTC instant in a given IANA timezone.
+// Intl can report "24" for midnight under hour12:false in some
+// environments -- % 24 normalizes that to 0.
+function localHour(nowIso, timezone) {
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: timezone,
+    hour: 'numeric',
+    hour12: false,
+  });
+  const hourPart = formatter.formatToParts(new Date(nowIso)).find((p) => p.type === 'hour').value;
+  return parseInt(hourPart, 10) % 24;
+}
+
+// Fixed, non-overlapping, full-day coverage -- deliberately simple (no
+// per-user configuration) since this is a 2-person personal bot, not a
+// general scheduling tool.
+function mealTypeForHour(hour) {
+  if (hour >= 4 && hour < 11) return 'breakfast';
+  if (hour >= 11 && hour < 16) return 'lunch';
+  return 'dinner';
+}
+
+function handleAte(state, args, context) {
   // args is already trimmed by parseCommand's dispatcher, so no need to
   // trim it again here.
   const dish = args;
@@ -285,11 +308,13 @@ function handleAte(state, args) {
   const lengthError = dishLengthError(state, dish);
   if (lengthError) return lengthError;
 
+  const mealType = mealTypeForHour(localHour(context.nowIso, context.config.timezone));
+
   return {
     state,
     effects: [
-      { type: 'food_log', entry: { dish } },
-      { type: 'send', text: `Logged: ${dish}` },
+      { type: 'food_log', entry: { dish, mealType } },
+      { type: 'send', text: `Logged: ${dish} (${mealType})` },
     ],
   };
 }
@@ -300,6 +325,10 @@ function handleFood(state, args) {
   const limit = Math.min(Math.max(n, 1), LIMITS.foodHistoryMax);
 
   return { state, effects: [{ type: 'food_history', limit }] };
+}
+
+function handleHistory(state) {
+  return { state, effects: [{ type: 'history_summary' }] };
 }
 
 function handleMenu(state, args) {
@@ -372,11 +401,13 @@ export function handle(state, event, context) {
     case '/config':
       return handleConfig(working, context);
     case '/ate':
-      return handleAte(working, args);
+      return handleAte(working, args, context);
     case '/food':
       return handleFood(working, args);
     case '/menu':
       return handleMenu(working, args);
+    case '/history':
+      return handleHistory(working);
     default:
       return reply(working, 'Unknown command. Type /help to see what I can do.');
   }

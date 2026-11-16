@@ -14,6 +14,7 @@ import {
   readSessionLog,
   appendFoodLog,
   readFoodLog,
+  listSessionSummaries,
   listMenu,
   addMenuItem,
   removeMenuItem,
@@ -23,6 +24,10 @@ import {
 
 const DEFAULT_PARTICIPANTS = ['Person 1', 'Person 2'];
 const DEFAULT_SESSION_LENGTH = 21;
+// Fixed for this user rather than configurable: a 2-person personal bot,
+// not a multi-timezone product. Drives both /ate's breakfast/lunch/dinner
+// auto-tagging and /food's displayed dates.
+const TIMEZONE = 'Asia/Kolkata';
 
 function formatAuditRows(rows) {
   if (rows.length === 0) return 'No picks logged yet.';
@@ -37,7 +42,30 @@ function formatAuditRows(rows) {
 
 function formatFoodRows(rows) {
   if (rows.length === 0) return 'No food logged yet.';
-  return rows.map((r) => `${r.loggedAt}: ${r.dish}`).join('\n');
+  return rows
+    .map((r) => {
+      const date = new Date(r.loggedAt).toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        timeZone: TIMEZONE,
+      });
+      // mealType is null for any row logged before this feature existed.
+      return r.mealType ? `${date}, ${r.mealType}: ${r.dish}` : `${date}: ${r.dish}`;
+    })
+    .join('\n');
+}
+
+function formatHistoryRows(summaries) {
+  if (summaries.length === 0) return 'No sessions yet.';
+  const lastIndex = summaries.length - 1;
+  return summaries
+    .map((s, i) => {
+      const totalPicks = s.totals.reduce((sum, t) => sum + t.count, 0);
+      const inProgress = i === lastIndex && totalPicks < s.n ? ' (in progress)' : '';
+      const tally = s.totals.map((t) => `${t.name} ${t.count}`).join(', ');
+      return `Session ${s.sessionIndex} (n=${s.n}): ${tally}${inProgress}`;
+    })
+    .join('\n');
 }
 
 // Parses and validates the inbound Telegram update. Returns null for any
@@ -104,12 +132,18 @@ async function runEffects(env, chatId, updateId, nowIso, originalSession, result
       }
 
       case 'food_log':
-        await appendFoodLog(env, chatId, effect.entry.dish, updateId, nowIso);
+        await appendFoodLog(env, chatId, effect.entry.dish, effect.entry.mealType, updateId, nowIso);
         break;
 
       case 'food_history': {
         const rows = await readFoodLog(env, chatId, effect.limit);
         await sendMessage(env, chatId, formatFoodRows(rows));
+        break;
+      }
+
+      case 'history_summary': {
+        const summaries = await listSessionSummaries(env, chatId);
+        await sendMessage(env, chatId, formatHistoryRows(summaries));
         break;
       }
 
@@ -196,6 +230,7 @@ export default {
         config: {
           defaultParticipants: DEFAULT_PARTICIPANTS,
           defaultSessionLength: DEFAULT_SESSION_LENGTH,
+          timezone: TIMEZONE,
         },
         nowMs,
         nowIso,

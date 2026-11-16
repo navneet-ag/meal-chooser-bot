@@ -39,6 +39,7 @@ CREATE TABLE food_log (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   chat_id INTEGER,
   dish TEXT,
+  meal_type TEXT,
   logged_at TEXT,
   update_id INTEGER
 );

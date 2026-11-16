@@ -6,12 +6,17 @@ function msg(text) {
   return { text, chatId: 1, updateId: 1 };
 }
 
-function ctx() {
+function ctx(overrides = {}) {
   return {
-    config: { defaultParticipants: ['Person 1', 'Person 2'], defaultSessionLength: 21 },
+    config: {
+      defaultParticipants: ['Person 1', 'Person 2'],
+      defaultSessionLength: 21,
+      timezone: 'Asia/Kolkata',
+    },
     nowMs: 0,
     nowIso: '2026-11-12T00:00:00.000Z',
     random: () => 0.1,
+    ...overrides,
   };
 }
 
@@ -89,6 +94,11 @@ test('/audit with an active session emits an audit effect for the shell to fulfi
   assert.deepEqual(result.effects[0], {type:'audit', sessionIndex: state.session.sessionIndex});
 });
 
+test('/history emits a history_summary effect regardless of roster/session state', () => {
+  const result = handle({roster:null, session:null}, msg('/history'), ctx());
+  assert.deepEqual(result.effects, [{type:'history_summary'}]);
+});
+
 test('auto-rolled session picks up a roster change made mid-session', () => {
   let state = handle({roster:{names:['A','B'], defaultN:2}, session:null}, msg('/newsession 2'), ctx()).state;
   state = handle(state, msg('/draw'), ctx()).state; // mealsLogged=1, session 1 still active with A,B
@@ -99,9 +109,25 @@ test('auto-rolled session picks up a roster change made mid-session', () => {
 });
 
 test('/ate logs a standalone food diary entry with a pre-baked confirmation', () => {
+  // ctx()'s default nowIso (2026-11-12T00:00:00.000Z) is 05:30 local in
+  // Asia/Kolkata (UTC+5:30) -- within the 4-11 breakfast window.
   const result = handle({roster:null, session:null}, msg('/ate Pasta'), ctx());
-  assert.deepEqual(result.effects.find(e => e.type === 'food_log').entry, {dish:'Pasta'});
-  assert.match(result.effects.find(e => e.type === 'send').text, /Logged: Pasta/);
+  assert.deepEqual(result.effects.find(e => e.type === 'food_log').entry, {dish:'Pasta', mealType:'breakfast'});
+  assert.match(result.effects.find(e => e.type === 'send').text, /Logged: Pasta \(breakfast\)/);
+});
+
+test('/ate tags lunch and dinner correctly from local time of day', () => {
+  // 2026-11-12T07:00:00.000Z = 12:30 IST -> lunch (11-16).
+  const lunch = handle({roster:null, session:null}, msg('/ate Dal'), ctx({nowIso:'2026-11-12T07:00:00.000Z'}));
+  assert.equal(lunch.effects.find(e => e.type === 'food_log').entry.mealType, 'lunch');
+
+  // 2026-11-12T14:00:00.000Z = 19:30 IST -> dinner (16-24).
+  const dinner = handle({roster:null, session:null}, msg('/ate Khichdi'), ctx({nowIso:'2026-11-12T14:00:00.000Z'}));
+  assert.equal(dinner.effects.find(e => e.type === 'food_log').entry.mealType, 'dinner');
+
+  // 2026-11-12T20:00:00.000Z = 01:30 IST (next day) -> dinner (0-4 wraps in).
+  const lateNight = handle({roster:null, session:null}, msg('/ate Chai'), ctx({nowIso:'2026-11-12T20:00:00.000Z'}));
+  assert.equal(lateNight.effects.find(e => e.type === 'food_log').entry.mealType, 'dinner');
 });
 
 test('/ate rejects an empty dish without requiring a roster', () => {

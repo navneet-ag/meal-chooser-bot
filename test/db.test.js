@@ -5,7 +5,7 @@ import { freshEnv } from './helpers.js';
 import {
   getRoster, saveRoster,
   getActiveSession, createSession, recordDraw, readSessionLog,
-  appendFoodLog, readFoodLog,
+  appendFoodLog, readFoodLog, listSessionSummaries,
   listMenu, addMenuItem, removeMenuItem,
   hasProcessed, markProcessed,
 } from '../src/db.js';
@@ -133,12 +133,40 @@ test('readSessionLog returns ordered rows scoped to one session id', async (t) =
   assert.equal(log2.length, 0);
 });
 
-test('appendFoodLog then readFoodLog returns most-recent-first, limited', async (t) => {
+test('appendFoodLog then readFoodLog returns most-recent-first, limited, with mealType', async (t) => {
   const env = await freshEnv(t);
-  await appendFoodLog(env, '1', 'Pasta', 'u1', '2026-11-12T00:00:00.000Z');
-  await appendFoodLog(env, '1', 'Dal Rice', 'u2', '2026-11-12T01:00:00.000Z');
+  await appendFoodLog(env, '1', 'Pasta', 'breakfast', 'u1', '2026-11-12T00:00:00.000Z');
+  await appendFoodLog(env, '1', 'Dal Rice', 'dinner', 'u2', '2026-11-12T01:00:00.000Z');
   const rows = await readFoodLog(env, '1', 1);
-  assert.deepEqual(rows, [{ dish: 'Dal Rice', loggedAt: '2026-11-12T01:00:00.000Z' }]);
+  assert.deepEqual(rows, [{ dish: 'Dal Rice', mealType: 'dinner', loggedAt: '2026-11-12T01:00:00.000Z' }]);
+});
+
+test('listSessionSummaries returns per-session pick totals, oldest first', async (t) => {
+  const env = await freshEnv(t);
+
+  const s1 = startSession(2, ['A', 'B'], () => 0.1, '2026-11-12T00:00:00.000Z', 1);
+  await createSession(env, '1', s1);
+  const d1 = drawNext(s1, () => 0.1);
+  await recordDraw(env, s1, { sessionIndex: 1, mealNumber: d1.mealNumber, name: d1.winner.name, method: 'auto', probability: d1.winner.p, forced: d1.winner.forced }, 'u1', '2026-11-12T00:01:00.000Z');
+  const d2 = drawNext(s1, () => 0.9);
+  await recordDraw(env, s1, { sessionIndex: 1, mealNumber: d2.mealNumber, name: d2.winner.name, method: 'auto', probability: d2.winner.p, forced: d2.winner.forced }, 'u2', '2026-11-12T00:02:00.000Z');
+
+  const s2 = startSession(2, ['A', 'B'], () => 0.1, '2026-11-13T00:00:00.000Z', 2);
+  await createSession(env, '1', s2);
+  const d3 = drawNext(s2, () => 0.1);
+  await recordDraw(env, s2, { sessionIndex: 2, mealNumber: d3.mealNumber, name: d3.winner.name, method: 'auto', probability: d3.winner.p, forced: d3.winner.forced }, 'u3', '2026-11-13T00:01:00.000Z');
+  // session 2 left incomplete on purpose: only 1 of 2 meals logged.
+
+  const summaries = await listSessionSummaries(env, '1');
+  assert.deepEqual(summaries, [
+    { sessionIndex: 1, n: 2, totals: [{ name: 'A', count: 1 }, { name: 'B', count: 1 }] },
+    { sessionIndex: 2, n: 2, totals: [{ name: 'A', count: 1 }] },
+  ]);
+});
+
+test('listSessionSummaries returns an empty array when the chat has never started a session', async (t) => {
+  const env = await freshEnv(t);
+  assert.deepEqual(await listSessionSummaries(env, '1'), []);
 });
 
 test('addMenuItem reports added:false on a second identical add', async (t) => {
